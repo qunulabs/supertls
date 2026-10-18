@@ -17,10 +17,12 @@ type Trust struct {
 	checkHostname bool
 }
 
-// TrustPool recognises a server whose presented chain leads to a root in pool.
-// The hostname is not checked and validity dates are neutralised, so a genuine
-// server with an expired leaf or drifted SANs is still recognised as genuine.
-// A nil pool yields the invalid zero Trust.
+// TrustPool recognises a server whose presented chain leads to a root in pool
+// and is valid for server authentication: x509.ExtKeyUsageServerAuth is
+// required, so a certificate in the chain that lists extended key usages must
+// include it. The hostname is not checked and validity dates are neutralised,
+// so a genuine server with an expired leaf or drifted SANs is still recognised
+// as genuine. A nil pool yields the invalid zero Trust.
 func TrustPool(pool *x509.CertPool) Trust {
 	if pool == nil {
 		return Trust{}
@@ -30,6 +32,12 @@ func TrustPool(pool *x509.CertPool) Trust {
 
 // TrustPoolWithHostname is TrustPool that also requires the leaf to cover the
 // dialled host name. A nil pool yields the invalid zero Trust.
+//
+// The host checked is the one passed to Dial, not a server name the inner
+// credentials override it with: dialling an IP address while the inner
+// credentials verify a DNS name makes a genuine server fail the check, so it is
+// ruled intercepted and tunnelled. That is safe (the inner session still
+// verifies the server) but costs a tunnel; use TrustPool for that setup.
 func TrustPoolWithHostname(pool *x509.CertPool) Trust {
 	if pool == nil {
 		return Trust{}
@@ -38,8 +46,8 @@ func TrustPoolWithHostname(pool *x509.CertPool) Trust {
 }
 
 // TrustSystemRoots recognises a server whose presented chain leads to a root in
-// the operating system's trust store and whose leaf covers the dialled host
-// name. Use it for a server that presents a certificate from the public web PKI.
+// the operating system's trust store, is valid for server authentication
+// (x509.ExtKeyUsageServerAuth), and whose leaf covers the dialled host name. Use it for a server that presents a certificate from the public web PKI.
 func TrustSystemRoots() Trust {
 	return Trust{system: true, checkHostname: true}
 }

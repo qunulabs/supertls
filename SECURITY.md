@@ -7,7 +7,8 @@ sessions it has any say over: the outer one verifies nothing, by design, and the
 one is entirely the caller's.
 
 **supertls verifies exactly one thing, and only on the probe:** whether the chain the
-peer presents reaches the configured `Trust` (and, for `TrustPoolWithHostname` and
+peer presents reaches the configured `Trust` with server authentication
+(`ExtKeyUsageServerAuth`) allowed along it (and, for `TrustPoolWithHostname` and
 `TrustSystemRoots`, whether the leaf covers the dialled host). That answer decides
 **routing**, whether a failed direct dial is worth tunnelling. It does not decide
 trust. A peer the probe calls genuine is still verified again, by your credentials, on
@@ -65,7 +66,12 @@ client authentication verifies it on the inner session (for example
 **Resource exposure.** An unauthenticated peer can open tunnels up to the configured
 limits and no further: a global cap, a per-address cap, a per-address open rate, a
 handshake timeout, an idle bound and an absolute lifetime. Raising them raises the
-memory an attacker can pin (about 134 KiB and eleven goroutines per tunnel).
+memory an attacker can pin (about 134 KiB and eleven goroutines per tunnel). The
+per-address limits key on the outer peer IP, so behind a TCP load balancer or NAT that
+hides client addresses they apply to every client together. The outer server keeps
+gRPC's default 4 MiB receive limit per message: a peer can make it allocate up to that
+for one message before the tunnel rejects a frame over 64 KiB, bounded by HTTP/2 flow
+control and the caps above (see the README's Server section).
 
 ## Reporting a vulnerability
 

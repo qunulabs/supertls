@@ -18,7 +18,8 @@
 // so the inner server's logs and gRPC's connection map see a meaningful address.
 // On shutdown call GracefulStop with both servers.
 //
-// Five rules, each of which fails silently when broken:
+// Six rules, each of which fails silently when broken (the same six are in the
+// README):
 //
 //  1. Register the tunnel service on the outer server ONLY. Registering it on
 //     the inner server would let a tunnel nest inside a tunnel.
@@ -35,6 +36,19 @@
 //     outer connection is permissive and presents none. Verify client
 //     certificates on the inner session, where the identity lives, for example
 //     with tls.VerifyClientCertIfGiven and a per-call check.
+//  6. Register the same services on both servers. A handler cannot tell
+//     whether a call came through a tunnel, and a service missing from the
+//     inner server is Unimplemented for tunnelled clients only.
+//
+// The outer server keeps gRPC's default receive limit of 4 MiB per message.
+// The tunnel handler rejects any frame over conn.MaxFrameBytes (64 KiB), but
+// gRPC reads and decodes the whole message first, so a peer can make the
+// server allocate up to 4 MiB for one message before the rejection. HTTP/2
+// flow control and the caps in Limits bound how many such messages are in
+// flight. This matches the server the library was extracted from. A deployment
+// that wants a tighter bound adds grpc.MaxRecvMsgSize to the outer server's
+// options, above conn.MaxFrameBytes plus framing overhead; it applies to every
+// service on that server.
 //
 // The tunnel call is unauthenticated by construction, exactly as the outer
 // server's other pre-authentication calls are, so what it exposes is resource

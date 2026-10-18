@@ -15,35 +15,60 @@ library. The date is set when the version is tagged.
 
 ### Added
 
-- `supertls`: `Dialer`, `NewDialer`, `Dialer.Dial`, `Dialer.Mode`, `Conn`, `Mode`,
-  `ModeChange`, `DialError` and the sentinel errors `ErrInvalidOption`, `ErrNotReady`,
-  `ErrProxyConnect`, `ErrForeignCertificate` and `ErrWindowInvariant`.
+Every exported identifier, by package (`go doc -all` is the source this list was
+checked against).
+
+- `supertls`: `Dialer`, `NewDialer`, `Dialer.Dial`, `Dialer.Mode`, `Conn`,
+  `Conn.ClientConn`, `Conn.Mode`, `Conn.Close`, `Mode` (`ModeUnknown`, `ModeDirect`,
+  `ModeTunnel`) and `Mode.String`, `ModeChange`, `DialError` with `Error` and `Unwrap`,
+  and the sentinel errors `ErrInvalidOption`, `ErrNotReady`, `ErrProxyConnect`,
+  `ErrForeignCertificate` and `ErrWindowInvariant`.
 - `Trust`, `TrustPool`, `TrustPoolWithHostname` and `TrustSystemRoots`: the trust is a
   parameter, and the caller supplies the inner credentials, which the library never
-  modifies.
-- `Probe` and `Verdict` (`VerdictInconclusive`, `VerdictGenuine`, `VerdictIntercepted`):
-  the interception probe, which dials the way gRPC dials (`HTTP_PROXY`, `CONNECT`).
-- Options: `WithLogger`, `WithOnModeChange`, `WithServiceName`, `WithDirectDialOptions`,
-  `WithOuterDialOptions`, `WithInnerBackoff`, `WithOuterBackoff`, `WithOuterKeepalive`,
-  `WithWindows`, `WithDirectDialBudget`, `WithTunnelDialBudget`, `WithProbeTimeout` and
-  `WithTunnelModeTTL`. A backoff is refused unless `BaseDelay >= 0`, `MaxDelay > 0`,
-  `Multiplier >= 1` and `Jitter` is in [0, 1]; a keepalive needs a positive `Time` and
-  `Timeout`.
+  modifies. All three require server authentication (`ExtKeyUsageServerAuth`) along the
+  chain.
+- `Probe` and `Verdict` (`VerdictInconclusive`, `VerdictGenuine`, `VerdictIntercepted`)
+  with `Verdict.String`: the interception probe, which dials the way gRPC dials
+  (`HTTP_PROXY`, `CONNECT`).
+- Options (`Option`): `WithLogger`, `WithOnModeChange`, `WithServiceName`,
+  `WithDirectDialOptions`, `WithOuterDialOptions`, `WithInnerBackoff`, `WithOuterBackoff`,
+  `WithOuterKeepalive`, `WithWindows`, `WithDirectDialBudget`, `WithTunnelDialBudget`,
+  `WithProbeTimeout` and `WithTunnelModeTTL`. A backoff is refused unless
+  `BaseDelay >= 0`, `MaxDelay > 0`, `Multiplier >= 1` and `Jitter` is in [0, 1]; a
+  keepalive needs a positive `Time` and `Timeout`.
 - Defaults: the constants `DefaultDirectDialBudget`, `DefaultTunnelDialBudget`,
   `DefaultProbeTimeout`, `DefaultTunnelModeTTL`, `DefaultServiceName` and
   `DefaultOuterMinConnectTimeout`, and the functions `DefaultInnerBackoff()`,
   `DefaultOuterBackoff()` and `DefaultOuterKeepalive()`, which return a fresh copy so the
   package holds no mutable state. Each `Dialer` keeps its own settings from construction.
-- `Windows`, `DefaultWindows` and `Windows.Validate`: configurable flow-control windows
+- `Windows`, `DefaultWindows`, `Windows.Validate`, `MinWindow` and the constants
+  `DefaultOuterStreamWindow`, `DefaultOuterConnWindow`, `DefaultInnerStreamWindow`,
+  `DefaultInnerConnWindow` and `DefaultBufferSize`: configurable flow-control windows
   with Sentinel's values as defaults. An outer stream window smaller than the inner
   connection window is refused at construction.
-- `server`: `Service`, `New`, `Register`, `Listener`, `OuterServerOptions`,
-  `InnerServerOptions`, `GracefulStop` (inner server first), `OpenTunnels`,
-  `KeepalivePolicy`, `Limits`, `DefaultLimits`, `WithLimits`, `WithListenerAddr`,
-  `WithLogger`, `WithServiceName`, `WithWindows` and the server-side `Windows`.
-- `conn`: `Conn` (a `net.Conn` over a frame stream), `NewConn`, `Listener`, `NewListener`,
-  `Stream`, `Options`, `MaxFrameBytes` and `DefaultAcceptTimeout`.
-- `tunnelpb`: generated code for the neutral `supertls.v1.TunnelService/Open`.
+- `server`: `Service`, `New`, `Service.Register`, `Service.Listener`,
+  `Service.OuterServerOptions`, `Service.InnerServerOptions`, `Service.GracefulStop`
+  (inner server first), `Service.OpenTunnels` (held slots, including tunnels not yet
+  accepted), `Service.Open`, `KeepalivePolicy`, `KeepaliveMinTime`, `DefaultServiceName`,
+  `Option`, `WithLimits`, `WithListenerAddr`, `WithLogger`, `WithServiceName`,
+  `WithWindows`, the server-side `Windows` and `Windows.Validate`, `ErrInvalidOption`
+  and `ErrWindowInvariant`.
+- `server` limits: `Limits`, `DefaultLimits`, `Limits.Validate` and the constants
+  `DefaultMaxConcurrent`, `DefaultMaxPerAddress`, `DefaultOpenBurst`,
+  `DefaultOpenRefillPerSecond`, `DefaultBucketSweep`, `DefaultAcceptTimeout`,
+  `DefaultInnerHandshakeTimeout`, `DefaultInnerMaxConnectionIdle` and
+  `DefaultMaxLifetime`.
+- `conn`: `Conn` (a `net.Conn` over a frame stream, with `Read`, `Write`, `Close`,
+  `Done`, `LocalAddr`, `RemoteAddr`, `SetDeadline`, `SetReadDeadline` and
+  `SetWriteDeadline`), `NewConn`, `Options`, `Stream`, `Listener` (`Accept`, `Addr`,
+  `Close`, `Deliver`), `NewListener`, `MaxFrameBytes`, `DefaultAcceptTimeout`,
+  `ErrFrameTooLarge` and `ErrDeliverTimeout`.
+- `tunnelpb`: generated code for the neutral `supertls.v1.TunnelService/Open`: `Frame`,
+  `TunnelServiceClient`, `NewTunnelServiceClient`, `TunnelServiceServer`,
+  `RegisterTunnelServiceServer`, `UnimplementedTunnelServiceServer`,
+  `UnsafeTunnelServiceServer`, `TunnelService_ServiceDesc`, `TunnelService_Open_FullMethodName`,
+  `File_supertls_v1_tunnel_proto` and the stream aliases `TunnelService_OpenClient` and
+  `TunnelService_OpenServer`.
 - `WithServiceName` on both client and server, so a deployment can keep an existing
   service name on the wire (Sentinel keeps `sentinel.tunnel.v1.TunnelService`). Both
   sides apply one rule: a dotted sequence of identifiers such as `pkg.v1.Service`.

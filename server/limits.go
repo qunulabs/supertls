@@ -125,6 +125,11 @@ type Limits struct {
 	MaxConcurrent int
 	// MaxPerAddress bounds the open tunnels from one client address. It must not
 	// exceed MaxConcurrent.
+	//
+	// The address is the IP of the OUTER connection's peer. Behind a TCP load
+	// balancer or NAT that hides client addresses every client shares one
+	// address, so this limit and the open rate below apply to the whole fleet
+	// together. Forwarding headers and PROXY protocol are not read.
 	MaxPerAddress int
 	// OpenBurst and OpenRefillPerSecond are the token bucket that bounds how fast
 	// one address may open tunnels.

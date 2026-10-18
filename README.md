@@ -143,22 +143,33 @@ go outer.Serve(lis)
 svc.GracefulStop(inner, outer, 30*time.Second)
 ```
 
-Build the credentials in `myOpts` for both servers from the same `tls.Config` value, so
-the inner session is byte for byte the one a direct client would run. The outer server
-must not require a client certificate: the client's outer connection presents none.
-Verify client certificates on the inner session, where the identity lives.
+Six rules, each of which fails silently when broken (the same six are in the `server`
+package documentation):
 
-Five rules, each of which fails silently when broken:
-
-1. Register the tunnel service on the outer server only (`svc.Register`).
+1. Register the tunnel service on the outer server only (`svc.Register`). Registering it
+   on the inner server would let a tunnel nest inside a tunnel.
 2. Give `InnerServerOptions` to the inner server only. They set `MaxConnectionIdle`,
    which would close direct clients of the outer server that are idle between calls.
-3. Use the same `tls.Config` for both servers.
+3. Build both servers' credentials from the same `tls.Config` value, so the inner
+   session is byte for byte the one a direct client would run.
 4. Stop the inner server first. `GracefulStop` does, and splits its budget between the
    two. Stopping the outer server first waits on tunnel handlers that wait on the inner
    server nobody asked to stop.
-5. Register the same services on both servers. A handler cannot tell whether a call came
-   through a tunnel.
+5. The outer server must not require a client certificate: the client's outer
+   connection presents none. Verify client certificates on the inner session, where the
+   identity lives, for example with `tls.VerifyClientCertIfGiven` and a per-call check.
+6. Register the same services on both servers. A handler cannot tell whether a call came
+   through a tunnel, and a service missing from the inner server is `Unimplemented` for
+   tunnelled clients only.
+
+**The outer server keeps gRPC's default 4 MiB receive limit per message.** The tunnel
+handler rejects any frame over 64 KiB (`conn.MaxFrameBytes`), but gRPC reads and
+decodes the whole message first, so a peer can make the server allocate up to 4 MiB for
+one message before the rejection. HTTP/2 flow control (the outer windows) and the tunnel
+caps in `Limits` bound how many such messages can be in flight. This is the same exposure
+Sentinel's server had. To tighten it, add `grpc.MaxRecvMsgSize` to the outer server's
+options; it must stay above `conn.MaxFrameBytes` plus framing overhead, and it applies to
+every service on that server, not only the tunnel.
 
 ## Trust
 
@@ -168,11 +179,18 @@ your inner credentials.
 
 | Constructor | Recognises a peer whose chain... |
 |---|---|
-| `TrustPool(pool)` | leads to a root in `pool`. The hostname is ignored and validity is pinned to the latest `NotBefore` in the chain plus one second, so a genuine server with an expired leaf or drifted SANs is still genuine. |
+| `TrustPool(pool)` | leads to a root in `pool`, with server authentication (`ExtKeyUsageServerAuth`) allowed along the chain: a certificate that lists extended key usages must include it. The hostname is ignored and validity is pinned to the latest `NotBefore` in the chain plus one second, so a genuine server with an expired leaf or drifted SANs is still genuine. |
 | `TrustPoolWithHostname(pool)` | the same, and the leaf also covers the dialled host. |
 | `TrustSystemRoots()` | leads to a root in the operating system store, and the leaf covers the dialled host. For a server on the public web PKI. |
 
-A nil pool yields the invalid zero `Trust`, which `NewDialer` refuses.
+All three require server authentication along the chain, as above. A nil pool yields the
+invalid zero `Trust`, which `NewDialer` refuses.
+
+With `TrustPoolWithHostname`, the probe checks the host you dial, not the server name
+your inner credentials verify. Dialling an IP address while the inner credentials
+override the server name to a DNS name makes a genuine server fail the hostname check,
+so it is ruled intercepted and tunnelled. That is safe, since the inner session still
+verifies the server, but it costs a tunnel; use `TrustPool` for that setup.
 
 **With `TrustSystemRoots`, a corporate inspection CA installed in the operating system
 store makes interception look genuine.** The probe then sees a chain it recognises,
@@ -229,6 +247,14 @@ you mean to change, since `server.WithLimits` replaces all of them.
 | `InnerHandshakeTimeout` | 20 s | A peer that opens a tunnel and never speaks. |
 | `InnerMaxConnectionIdle` | 5 min | Reclaims a tunnel that handshakes and then issues nothing. |
 | `MaxLifetime` | 4 h | Absolute backstop on one tunnel. |
+
+**Per-address limits key on the outer peer IP**, the address the outer server's TCP
+connection comes from. Behind a TCP (layer-4) load balancer or a NAT that does not
+preserve client addresses, every client arrives from the same address, so
+`MaxPerAddress` and the open rate apply to the whole fleet: 256 tunnels and 17 opens per
+second (after a 512 burst) for every client together, by default. Size them for that, or
+put the server where it sees real client addresses (for example a load balancer that
+passes them through). The library does not read PROXY protocol or forwarding headers.
 
 There is deliberately no global open-rate limit: it cannot be sized from anything the
 process knows, and one set too low turns a mass reconnect into an outage that prevents
