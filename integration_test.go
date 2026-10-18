@@ -2,10 +2,10 @@ package supertls_test
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
-	"slices"
+	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -211,23 +211,32 @@ func TestServiceNameMismatchFailsLoudly(t *testing.T) {
 	}
 }
 
-// tlsSnapshot is the part of a tls.Config a Dial must leave alone.
-type tlsSnapshot struct {
-	serverName string
-	rootCAs    any
-	minVersion uint16
-	curves     []tls.CurveID
-	nextProtos []string
+// watchedCreds wraps the caller's credentials and records every call that
+// could alter them. credentials.NewTLS clones its tls.Config, so inspecting the
+// config proves nothing; the credentials object is what a Dial could touch.
+type watchedCreds struct {
+	credentials.TransportCredentials
+	overrides  *atomic.Int32
+	handshakes *atomic.Int32
 }
 
-func snapshot(c *tls.Config) tlsSnapshot {
-	return tlsSnapshot{
-		serverName: c.ServerName,
-		rootCAs:    c.RootCAs,
-		minVersion: c.MinVersion,
-		curves:     slices.Clone(c.CurvePreferences),
-		nextProtos: slices.Clone(c.NextProtos),
-	}
+func newWatchedCreds(inner credentials.TransportCredentials) *watchedCreds {
+	return &watchedCreds{TransportCredentials: inner, overrides: new(atomic.Int32), handshakes: new(atomic.Int32)}
+}
+
+func (w *watchedCreds) ClientHandshake(ctx context.Context, authority string, raw net.Conn) (net.Conn, credentials.AuthInfo, error) {
+	w.handshakes.Add(1)
+	return w.TransportCredentials.ClientHandshake(ctx, authority, raw)
+}
+
+func (w *watchedCreds) Clone() credentials.TransportCredentials {
+	return &watchedCreds{TransportCredentials: w.TransportCredentials.Clone(), overrides: w.overrides, handshakes: w.handshakes}
+}
+
+//nolint:staticcheck // the method is part of the interface and is what is watched
+func (w *watchedCreds) OverrideServerName(name string) error {
+	w.overrides.Add(1)
+	return w.TransportCredentials.OverrideServerName(name)
 }
 
 func TestDialDoesNotModifyCallerTLSConfig(t *testing.T) {
@@ -235,11 +244,11 @@ func TestDialDoesNotModifyCallerTLSConfig(t *testing.T) {
 	backend, _ := startBackend(t, p)
 	proxy := startInterceptingProxy(t, backend, p.Proxy, []string{"h2"})
 
-	cfg := testpki.StrictClientTLS(p)
-	before := snapshot(cfg)
+	creds := newWatchedCreds(credentials.NewTLS(testpki.StrictClientTLS(p)))
+	before, beforeClone := creds.Info(), creds.Clone().Info()
 
 	d := newDialer(t, p, nil)
-	c, err := d.Dial(dialCtx(t), "localhost:"+portOf(t, proxy), credentials.NewTLS(cfg))
+	c, err := d.Dial(dialCtx(t), "localhost:"+portOf(t, proxy), creds)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -249,20 +258,18 @@ func TestDialDoesNotModifyCallerTLSConfig(t *testing.T) {
 	}
 	healthCheck(t, c.ClientConn())
 
-	after := snapshot(cfg)
-	if before.serverName != after.serverName {
-		t.Errorf("ServerName changed: %q -> %q", before.serverName, after.serverName)
+	// The caller's credentials must have run the inner handshake (so this
+	// test sees the real path) and must never have been told another name.
+	if creds.handshakes.Load() == 0 {
+		t.Fatal("the caller's credentials never ran a handshake; the test is not exercising them")
 	}
-	if before.rootCAs != after.rootCAs {
-		t.Error("RootCAs pointer changed")
+	if n := creds.overrides.Load(); n != 0 {
+		t.Fatalf("OverrideServerName was called %d times on the caller's credentials", n)
 	}
-	if before.minVersion != after.minVersion {
-		t.Errorf("MinVersion changed: %d -> %d", before.minVersion, after.minVersion)
+	if after := creds.Info(); after != before {
+		t.Errorf("Info() changed: %+v -> %+v", before, after)
 	}
-	if !slices.Equal(before.curves, after.curves) {
-		t.Errorf("CurvePreferences changed: %v -> %v", before.curves, after.curves)
-	}
-	if !slices.Equal(before.nextProtos, after.nextProtos) {
-		t.Errorf("NextProtos changed: %v -> %v", before.nextProtos, after.nextProtos)
+	if afterClone := creds.Clone().Info(); afterClone != beforeClone {
+		t.Errorf("Clone().Info() changed: %+v -> %+v", beforeClone, afterClone)
 	}
 }

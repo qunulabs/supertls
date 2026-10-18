@@ -68,6 +68,15 @@ type Conn struct {
 	// recvErr, so a writer can wait for the stream's terminal status.
 	recvEnded chan struct{}
 
+	// parkMu guards parked and parkWait. parked is true while the reader
+	// goroutine holds a received frame that Read has not yet taken, which means
+	// it is not inside Recv and cannot observe the stream's terminal status.
+	// parkWait, when non-nil, is closed on the next transition to parked, so a
+	// writer waiting for the status learns it will not come without a Read.
+	parkMu   sync.Mutex
+	parked   bool
+	parkWait chan struct{}
+
 	// sends carries frames from Write to the writer goroutine that owns Send.
 	// Unbuffered, so a caller that abandons a frame on a deadline cannot queue
 	// another one behind it until the first has actually gone out.
@@ -164,12 +173,40 @@ func (c *Conn) readLoop() {
 			// end of the stream, which is what a zero-byte Read would mean.
 			continue
 		}
+		c.setParked(true)
 		select {
 		case c.frames <- data:
+			c.setParked(false)
 		case <-c.done:
 			return
 		}
 	}
+}
+
+// setParked records whether the reader goroutine is holding an undelivered
+// frame, and wakes a writer waiting on the transition to parked.
+func (c *Conn) setParked(v bool) {
+	c.parkMu.Lock()
+	c.parked = v
+	if v && c.parkWait != nil {
+		close(c.parkWait)
+		c.parkWait = nil
+	}
+	c.parkMu.Unlock()
+}
+
+// parkedOrWaiter reports whether the reader is parked on an undelivered frame;
+// if not it returns a channel closed when that next happens.
+func (c *Conn) parkedOrWaiter() (bool, <-chan struct{}) {
+	c.parkMu.Lock()
+	defer c.parkMu.Unlock()
+	if c.parked {
+		return true, nil
+	}
+	if c.parkWait == nil {
+		c.parkWait = make(chan struct{})
+	}
+	return false, c.parkWait
 }
 
 // Read implements net.Conn.
@@ -318,21 +355,42 @@ func (c *Conn) Write(p []byte) (int, error) {
 // receive side. Passing the io.EOF on would hide why the stream ended (a
 // service-name mismatch, for one, is an Unimplemented status), so this waits for
 // the reader goroutine to observe the terminal error and returns the same error
-// Read would. The wait is bounded by Close and by the write deadline, so Write
-// can never block forever.
+// Read would.
 //
-// Divergence from Sentinel, which returns the bare io.EOF from Write.
+// The wait ends early in three cases, so Write can never block forever. Close
+// or the write deadline fires. Or the reader goroutine is parked holding a frame
+// the caller has not read: it cannot reach the terminal Recv until Read takes
+// that frame, and buffering frames without bound to get past it is not an
+// option, so the bare io.EOF is returned and Read will still report the status
+// after the data.
+//
+// Divergence from Sentinel, which always returns the bare io.EOF from Write.
 func (c *Conn) sendError(err error) error {
 	if !errors.Is(err, io.EOF) {
 		return err
 	}
-	select {
-	case <-c.recvEnded:
-		return c.readError()
-	case <-c.done:
-		return net.ErrClosed
-	case <-c.wd.wait():
-		return os.ErrDeadlineExceeded
+	for {
+		select {
+		case <-c.recvEnded:
+			return c.readError()
+		default:
+		}
+		if isClosedChan(c.done) {
+			return net.ErrClosed
+		}
+		parked, wake := c.parkedOrWaiter()
+		if parked {
+			return err
+		}
+		select {
+		case <-c.recvEnded:
+			return c.readError()
+		case <-wake:
+		case <-c.done:
+			return net.ErrClosed
+		case <-c.wd.wait():
+			return os.ErrDeadlineExceeded
+		}
 	}
 }
 

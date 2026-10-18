@@ -575,23 +575,38 @@ func TestConnSetDeadlineAfterCloseIsErrClosed(t *testing.T) {
 }
 
 // endedStream is a stream gRPC has already ended: Send reports the bare io.EOF
-// it uses for that, and the real status is available only from Recv. recv is
-// closed by the test to let Recv return recvErr.
+// it uses for that, and the real status is available only from Recv. Recv
+// returns frames first, then blocks until release is closed, then recvErr.
 type endedStream struct {
+	frames  [][]byte
 	recvErr error
 	release chan struct{}
+	sent    chan struct{} // closed on the first Send
+	once    sync.Once
 }
 
-func (s *endedStream) Send(*tunnelpb.Frame) error { return io.EOF }
+func newEndedStream(recvErr error, frames ...[]byte) *endedStream {
+	return &endedStream{frames: frames, recvErr: recvErr, release: make(chan struct{}), sent: make(chan struct{})}
+}
+
+func (s *endedStream) Send(*tunnelpb.Frame) error {
+	s.once.Do(func() { close(s.sent) })
+	return io.EOF
+}
 
 func (s *endedStream) Recv() (*tunnelpb.Frame, error) {
+	if len(s.frames) > 0 {
+		f := s.frames[0]
+		s.frames = s.frames[1:]
+		return &tunnelpb.Frame{Data: f}, nil
+	}
 	<-s.release
 	return nil, s.recvErr
 }
 
 func TestConnWriteReportsTheStreamStatusNotBareEOF(t *testing.T) {
 	want := status.Error(codes.Unimplemented, "unknown service")
-	s := &endedStream{recvErr: want, release: make(chan struct{})}
+	s := newEndedStream(want)
 	close(s.release)
 	c := NewConn(s, Options{})
 	defer c.Close()
@@ -606,7 +621,7 @@ func TestConnWriteReportsTheStreamStatusNotBareEOF(t *testing.T) {
 }
 
 func TestConnWriteAfterCleanEndIsEOF(t *testing.T) {
-	s := &endedStream{recvErr: io.EOF, release: make(chan struct{})}
+	s := newEndedStream(io.EOF)
 	close(s.release)
 	c := NewConn(s, Options{})
 	defer c.Close()
@@ -616,9 +631,40 @@ func TestConnWriteAfterCleanEndIsEOF(t *testing.T) {
 	}
 }
 
+// The peer sent data the caller has not read, then ended the stream. The reader
+// goroutine is parked on the unread frame and cannot see the status, so Write,
+// with no deadline and no concurrent Read, must still return promptly.
+func TestConnWriteWithUnreadFrameThenStatusDoesNotBlock(t *testing.T) {
+	s := newEndedStream(status.Error(codes.Unavailable, "gone"), []byte("unread"))
+	close(s.release)
+	c := NewConn(s, Options{})
+	defer c.Close()
+
+	errCh := make(chan error, 1)
+	go func() { _, err := c.Write([]byte("x")); errCh <- err }()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Write = %v, want io.EOF", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Write blocked behind an unread frame")
+	}
+
+	// The data and then the status are still delivered to Read, in order.
+	buf := make([]byte, 16)
+	n, err := c.Read(buf)
+	if err != nil || string(buf[:n]) != "unread" {
+		t.Fatalf("Read = %q, %v, want the unread frame", buf[:n], err)
+	}
+	if _, err := c.Read(buf); status.Code(err) != codes.Unavailable {
+		t.Fatalf("Read = %v, want the Unavailable status", err)
+	}
+}
+
 func TestConnWriteWaitingForStatusHonoursDeadlineAndClose(t *testing.T) {
 	// Recv never returns, so the status never arrives.
-	s := &endedStream{recvErr: io.EOF, release: make(chan struct{})}
+	s := newEndedStream(io.EOF)
 	defer close(s.release)
 	c := NewConn(s, Options{})
 	defer c.Close()
@@ -640,9 +686,14 @@ func TestConnWriteWaitingForStatusHonoursDeadlineAndClose(t *testing.T) {
 	if err := c.SetWriteDeadline(time.Time{}); err != nil {
 		t.Fatalf("clear deadline: %v", err)
 	}
-	go func() { _, err := c.Write([]byte("x")); errCh <- err }()
-	time.Sleep(50 * time.Millisecond)
-	c.Close()
+	// The first Send already happened; wait for the second, which the next
+	// Write makes, so Close lands while Write waits for the status.
+	s2 := newEndedStream(io.EOF)
+	defer close(s2.release)
+	c2 := NewConn(s2, Options{})
+	go func() { _, err := c2.Write([]byte("x")); errCh <- err }()
+	<-s2.sent
+	c2.Close()
 	select {
 	case err := <-errCh:
 		if !errors.Is(err, net.ErrClosed) {

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -32,7 +33,8 @@ func runInProxyChild(t *testing.T) bool {
 	if os.Getenv(proxyChildEnv) == "1" {
 		return true
 	}
-	cmd := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.count=1", "-test.v")
+	args := []string{"-test.run=^" + t.Name() + "$", "-test.count=1", "-test.v", "-test.timeout=2m"}
+	cmd := exec.Command(os.Args[0], args...)
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
 		if strings.HasSuffix(strings.ToUpper(name), "_PROXY") {
@@ -62,7 +64,7 @@ func startConnectProxy(t *testing.T, routes map[string]string, behaviour string,
 	t.Cleanup(func() { _ = lis.Close() })
 
 	var mu sync.Mutex
-	var seen []string
+	var seen, violations []string
 
 	handle := func(c net.Conn) {
 		defer c.Close()
@@ -99,7 +101,9 @@ func startConnectProxy(t *testing.T, routes map[string]string, behaviour string,
 			return
 		}
 		if br.Buffered() > 0 {
-			t.Errorf("proxy: client sent %d bytes before the 200", br.Buffered())
+			mu.Lock()
+			violations = append(violations, fmt.Sprintf("client sent %d bytes before the 200", br.Buffered()))
+			mu.Unlock()
 			return
 		}
 		if intercept != nil {
@@ -123,6 +127,14 @@ func startConnectProxy(t *testing.T, routes map[string]string, behaviour string,
 			go handle(c)
 		}
 	}()
+	// Violations are asserted from the test body, never from the proxy goroutine.
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, v := range violations {
+			t.Errorf("proxy: %s", v)
+		}
+	})
 	return lis.Addr().String(), func() []string {
 		mu.Lock()
 		defer mu.Unlock()
@@ -139,9 +151,7 @@ func proxyFixture(t *testing.T, p *testpki.PKI, behaviour string, intercept *tls
 	port := portOf(t, backend)
 	target = "origin.supertls.test:" + port
 	proxy, authorities := startConnectProxy(t, map[string]string{target: backend}, behaviour, intercept)
-	if err := os.Setenv("HTTPS_PROXY", "http://"+proxy); err != nil {
-		t.Fatalf("setenv: %v", err)
-	}
+	t.Setenv("HTTPS_PROXY", "http://"+proxy)
 	return target, authorities
 }
 
