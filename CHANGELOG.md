@@ -24,9 +24,16 @@ library. The date is set when the version is tagged.
 - `Probe` and `Verdict` (`VerdictInconclusive`, `VerdictGenuine`, `VerdictIntercepted`):
   the interception probe, which dials the way gRPC dials (`HTTP_PROXY`, `CONNECT`).
 - Options: `WithLogger`, `WithOnModeChange`, `WithServiceName`, `WithDirectDialOptions`,
-  `WithOuterDialOptions`, `WithInnerBackoff`, `WithWindows`, `WithDirectDialBudget`,
-  `WithTunnelDialBudget`, `WithProbeTimeout` and `WithTunnelModeTTL`, with their
-  `Default...` values.
+  `WithOuterDialOptions`, `WithInnerBackoff`, `WithOuterBackoff`, `WithOuterKeepalive`,
+  `WithWindows`, `WithDirectDialBudget`, `WithTunnelDialBudget`, `WithProbeTimeout` and
+  `WithTunnelModeTTL`. A backoff is refused unless `BaseDelay >= 0`, `MaxDelay > 0`,
+  `Multiplier >= 1` and `Jitter` is in [0, 1]; a keepalive needs a positive `Time` and
+  `Timeout`.
+- Defaults: the constants `DefaultDirectDialBudget`, `DefaultTunnelDialBudget`,
+  `DefaultProbeTimeout`, `DefaultTunnelModeTTL`, `DefaultServiceName` and
+  `DefaultOuterMinConnectTimeout`, and the functions `DefaultInnerBackoff()`,
+  `DefaultOuterBackoff()` and `DefaultOuterKeepalive()`, which return a fresh copy so the
+  package holds no mutable state. Each `Dialer` keeps its own settings from construction.
 - `Windows`, `DefaultWindows` and `Windows.Validate`: configurable flow-control windows
   with Sentinel's values as defaults. An outer stream window smaller than the inner
   connection window is refused at construction.

@@ -235,7 +235,13 @@ drains is `Unavailable`.
 
 Client timing defaults: direct dial budget 5 s (`DefaultDirectDialBudget`), probe 10 s
 (`DefaultProbeTimeout`), tunnel dial budget 20 s (`DefaultTunnelDialBudget`), tunnel
-decision TTL 1 h (`DefaultTunnelModeTTL`).
+decision TTL 1 h (`DefaultTunnelModeTTL`). Reconnect backoff: inner 0.5 s base, 1.6x,
+0.2 jitter, 15 s cap (`DefaultInnerBackoff()`, `WithInnerBackoff`); outer 1 s base, 1.6x,
+0.2 jitter, 60 s cap (`DefaultOuterBackoff()`, `WithOuterBackoff`). Outer keepalive: a
+ping every 30 s, stream or no stream, 20 s to answer (`DefaultOuterKeepalive()`,
+`WithOuterKeepalive`). The defaults are functions returning a fresh copy, and each
+`Dialer` keeps its own settings from construction, so nothing one caller changes reaches
+another `Dialer`.
 
 ## Known gaps
 

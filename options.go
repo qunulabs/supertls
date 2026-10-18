@@ -38,40 +38,51 @@ const (
 	DefaultOuterMinConnectTimeout = 20 * time.Second
 )
 
-// DefaultInnerBackoff is the inner connection's reconnect backoff. The ceiling
-// is short on purpose. If a proxy kills the tunnel every few seconds, gRPC's
-// default two-minute backoff would leave the connection down more than up.
-var DefaultInnerBackoff = backoff.Config{
-	BaseDelay:  500 * time.Millisecond,
-	Multiplier: 1.6,
-	Jitter:     0.2,
-	MaxDelay:   15 * time.Second,
+// DefaultInnerBackoff returns the inner connection's reconnect backoff. The
+// ceiling is short on purpose. If a proxy kills the tunnel every few seconds,
+// gRPC's default two-minute backoff would leave the connection down more than
+// up. It returns a fresh copy on every call: the package holds no mutable
+// defaults, so no assignment anywhere can change another Dialer. Override it per
+// Dialer with WithInnerBackoff.
+func DefaultInnerBackoff() backoff.Config {
+	return backoff.Config{
+		BaseDelay:  500 * time.Millisecond,
+		Multiplier: 1.6,
+		Jitter:     0.2,
+		MaxDelay:   15 * time.Second,
+	}
 }
 
-// DefaultOuterBackoff is the outer connection's reconnect backoff. The outer
-// connection is the one that reaches the network, so it takes a 60-second cap;
-// left at gRPC's default of two minutes it would hold a tunnelled client out for
-// that long after the server returns, and a fleet would come back together
-// rather than spread out. BaseDelay and Multiplier are gRPC's defaults, stated
-// so the whole schedule is in one place. The inner connection keeps its own
-// shorter cap, which is already inside this one.
-var DefaultOuterBackoff = backoff.Config{
-	BaseDelay:  time.Second,
-	Multiplier: 1.6,
-	Jitter:     0.2,
-	MaxDelay:   60 * time.Second,
+// DefaultOuterBackoff returns the outer connection's reconnect backoff. The
+// outer connection is the one that reaches the network, so it takes a 60-second
+// cap; left at gRPC's default of two minutes it would hold a tunnelled client
+// out for that long after the server returns, and a fleet would come back
+// together rather than spread out. BaseDelay and Multiplier are gRPC's defaults,
+// stated so the whole schedule is in one place. The inner connection keeps its
+// own shorter cap, which is already inside this one. It returns a fresh copy on
+// every call; override it per Dialer with WithOuterBackoff.
+func DefaultOuterBackoff() backoff.Config {
+	return backoff.Config{
+		BaseDelay:  time.Second,
+		Multiplier: 1.6,
+		Jitter:     0.2,
+		MaxDelay:   60 * time.Second,
+	}
 }
 
-// DefaultOuterKeepalive pings every 30 seconds, stream or no stream, and gives
-// up on a peer that has not answered in 20. That turns a dead outer connection
-// into a transport failure within about a minute, and it keeps the connection
-// warm so a proxy never reaps it for idleness between calls. A server whose
-// enforcement policy permits pings down to 5 seconds without a stream never
-// strikes it.
-var DefaultOuterKeepalive = keepalive.ClientParameters{
-	Time:                30 * time.Second,
-	Timeout:             20 * time.Second,
-	PermitWithoutStream: true,
+// DefaultOuterKeepalive returns the outer connection's keepalive: ping every 30
+// seconds, stream or no stream, and give up on a peer that has not answered in
+// 20. That turns a dead outer connection into a transport failure within about
+// a minute, and it keeps the connection warm so a proxy never reaps it for
+// idleness between calls. A server whose enforcement policy permits pings down
+// to 5 seconds without a stream never strikes it. It returns a fresh copy on
+// every call; override it per Dialer with WithOuterKeepalive.
+func DefaultOuterKeepalive() keepalive.ClientParameters {
+	return keepalive.ClientParameters{
+		Time:                30 * time.Second,
+		Timeout:             20 * time.Second,
+		PermitWithoutStream: true,
+	}
 }
 
 // config is the resolved client configuration. It carries only what an Option
@@ -91,7 +102,11 @@ type config struct {
 	windows Windows
 
 	directOpts, outerOpts []grpc.DialOption
-	innerBackoff          backoff.Config
+
+	// The backoffs and the keepalive are snapshotted here when the Dialer is
+	// built, so every Dialer reads only its own copy.
+	innerBackoff, outerBackoff backoff.Config
+	outerKeepalive             keepalive.ClientParameters
 }
 
 // Option configures a client.
@@ -105,14 +120,16 @@ func invalid(format string, args ...any) error {
 // windows as a whole.
 func newConfig(opts []Option) (config, error) {
 	c := config{
-		logger:       slog.Default(),
-		serviceName:  DefaultServiceName,
-		directBudget: DefaultDirectDialBudget,
-		tunnelBudget: DefaultTunnelDialBudget,
-		probeTimeout: DefaultProbeTimeout,
-		tunnelTTL:    DefaultTunnelModeTTL,
-		windows:      DefaultWindows(),
-		innerBackoff: DefaultInnerBackoff,
+		logger:         slog.Default(),
+		serviceName:    DefaultServiceName,
+		directBudget:   DefaultDirectDialBudget,
+		tunnelBudget:   DefaultTunnelDialBudget,
+		probeTimeout:   DefaultProbeTimeout,
+		tunnelTTL:      DefaultTunnelModeTTL,
+		windows:        DefaultWindows(),
+		innerBackoff:   DefaultInnerBackoff(),
+		outerBackoff:   DefaultOuterBackoff(),
+		outerKeepalive: DefaultOuterKeepalive(),
 	}
 	for _, o := range opts {
 		if o == nil {
@@ -253,14 +270,64 @@ func WithOuterDialOptions(opts ...grpc.DialOption) Option {
 	}
 }
 
+// validBackoff checks a backoff schedule: BaseDelay not negative, MaxDelay
+// positive, Multiplier at least 1 so the delay never shrinks, and Jitter in
+// [0, 1] so a delay is never negative. MaxDelay below BaseDelay is allowed:
+// gRPC caps every delay at MaxDelay. A NaN Multiplier or Jitter is refused.
+func validBackoff(name string, b backoff.Config) error {
+	switch {
+	case b.BaseDelay < 0:
+		return invalid("%s: BaseDelay %s is negative", name, b.BaseDelay)
+	case b.MaxDelay <= 0:
+		return invalid("%s: MaxDelay %s is not positive", name, b.MaxDelay)
+	case !(b.Multiplier >= 1):
+		return invalid("%s: Multiplier %v is below 1", name, b.Multiplier)
+	case !(b.Jitter >= 0 && b.Jitter <= 1):
+		return invalid("%s: Jitter %v is outside [0, 1]", name, b.Jitter)
+	}
+	return nil
+}
+
 // WithInnerBackoff sets the inner connection's reconnect backoff. The default
-// is DefaultInnerBackoff.
+// is DefaultInnerBackoff(). BaseDelay must not be negative, MaxDelay must be
+// positive, Multiplier must be at least 1 and Jitter must be in [0, 1].
 func WithInnerBackoff(b backoff.Config) Option {
 	return func(c *config) error {
-		if b.MaxDelay <= 0 {
-			return invalid("WithInnerBackoff: MaxDelay %s is not positive", b.MaxDelay)
+		if err := validBackoff("WithInnerBackoff", b); err != nil {
+			return err
 		}
 		c.innerBackoff = b
+		return nil
+	}
+}
+
+// WithOuterBackoff sets the outer connection's reconnect backoff, for this
+// Dialer only. The default is DefaultOuterBackoff(). It is validated like
+// WithInnerBackoff.
+func WithOuterBackoff(b backoff.Config) Option {
+	return func(c *config) error {
+		if err := validBackoff("WithOuterBackoff", b); err != nil {
+			return err
+		}
+		c.outerBackoff = b
+		return nil
+	}
+}
+
+// WithOuterKeepalive sets the outer connection's keepalive, for this Dialer
+// only. The default is DefaultOuterKeepalive(). Time and Timeout must be
+// positive. gRPC raises a Time below 10 seconds to 10 seconds, and the server
+// must permit the chosen interval (see server.KeepalivePolicy) or it closes the
+// connection for pinging too often.
+func WithOuterKeepalive(k keepalive.ClientParameters) Option {
+	return func(c *config) error {
+		if k.Time <= 0 {
+			return invalid("WithOuterKeepalive: Time %s is not positive", k.Time)
+		}
+		if k.Timeout <= 0 {
+			return invalid("WithOuterKeepalive: Timeout %s is not positive", k.Timeout)
+		}
+		c.outerKeepalive = k
 		return nil
 	}
 }

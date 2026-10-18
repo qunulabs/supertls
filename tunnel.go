@@ -107,10 +107,10 @@ func (d *Dialer) newOuterConn(host string) (*grpc.ClientConn, error) {
 		grpc.WithWriteBufferSize(w.Buffer),
 		grpc.WithReadBufferSize(w.Buffer),
 		grpc.WithConnectParams(grpc.ConnectParams{
-			Backoff:           DefaultOuterBackoff,
+			Backoff:           d.cfg.outerBackoff,
 			MinConnectTimeout: DefaultOuterMinConnectTimeout,
 		}),
-		grpc.WithKeepaliveParams(DefaultOuterKeepalive),
+		grpc.WithKeepaliveParams(d.cfg.outerKeepalive),
 	}
 	return grpc.NewClient(host, append(opts, d.cfg.outerOpts...)...)
 }
