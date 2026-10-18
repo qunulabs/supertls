@@ -236,6 +236,13 @@ func WithDirectDialOptions(opts ...grpc.DialOption) Option {
 // tunnel only, for example a proxy-aware dialer or a different keepalive. They
 // are applied after the library's own and so take precedence. They are never
 // applied to the direct connection.
+//
+// They must NEVER carry per-RPC credentials (grpc.WithPerRPCCredentials, or a
+// call option or interceptor that attaches a token). The outer connection
+// reports PrivacyAndIntegrity to gRPC while verifying nothing, so gRPC would
+// hand the token to whoever terminates it, an inspecting proxy included.
+// Per-RPC credentials belong on the inner connection, through the extra options
+// of Dial, where the caller's own credentials verify the peer.
 func WithOuterDialOptions(opts ...grpc.DialOption) Option {
 	return func(c *config) error {
 		if err := checkDialOptions("WithOuterDialOptions", opts); err != nil {
