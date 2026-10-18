@@ -62,8 +62,9 @@ func NewDialer(trust Trust, opts ...Option) (*Dialer, error) {
 }
 
 // Mode reports how host is currently reached. An expired tunnel decision reads
-// as ModeUnknown.
-func (d *Dialer) Mode(host string) Mode { return d.modes.get(host) }
+// as ModeUnknown. host is normalised as Dial normalises it, so "example.com"
+// and "example.com:443" read the same entry.
+func (d *Dialer) Mode(host string) Mode { return d.modes.get(hostPort(host)) }
 
 // Dial connects to host and returns the connection once it is ready.
 //
@@ -93,7 +94,11 @@ func (d *Dialer) Dial(ctx context.Context, host string, inner credentials.Transp
 	if err := checkDialArgs(host, inner, extra); err != nil {
 		return nil, err
 	}
-	if d.modes.get(host) == ModeTunnel {
+	// The cache, the once-per-host log and the hook are keyed by host:port,
+	// with the default port made explicit, so "example.com" and
+	// "example.com:443" are one host to them as they are to gRPC.
+	key := hostPort(host)
+	if d.modes.get(key) == ModeTunnel {
 		c, err := d.tunnelFn(ctx, host, inner, extra)
 		if err != nil {
 			return nil, fmt.Errorf("supertls: tunnelled dial of %s: %w", host, err)
@@ -102,7 +107,7 @@ func (d *Dialer) Dial(ctx context.Context, host string, inner credentials.Transp
 	}
 	c, directErr := d.directFn(ctx, host, inner, extra)
 	if directErr == nil {
-		d.transition(host, ModeDirect, VerdictGenuine, nil)
+		d.transition(key, ModeDirect, VerdictGenuine, nil)
 		return c, nil
 	}
 	if ctx.Err() != nil {
@@ -118,7 +123,7 @@ func (d *Dialer) Dial(ctx context.Context, host string, inner credentials.Transp
 	if tunnelErr != nil {
 		return nil, &DialError{Host: host, Direct: directErr, Verdict: v, ProbeErr: probeErr, Tunnel: tunnelErr}
 	}
-	d.transition(host, ModeTunnel, v, probeErr)
+	d.transition(key, ModeTunnel, v, probeErr)
 	return tc, nil
 }
 
@@ -148,7 +153,8 @@ func checkDialArgs(host string, inner credentials.TransportCredentials, extra []
 }
 
 // transition records host's new mode, logs the first switch to the tunnel per
-// host, and calls the hook when the mode changed.
+// host, and calls the hook when the mode changed. host is the cache key, the
+// output of hostPort.
 //
 // The cache update and the "did it change" decision are one step under the
 // cache's mutex (set returns what it replaced), so of many dials racing to the

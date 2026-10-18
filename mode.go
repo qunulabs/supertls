@@ -32,6 +32,11 @@ func (m Mode) String() string {
 // ModeChange describes a host's mode changing. It is handed to the hook
 // installed with WithOnModeChange.
 //
+// Host is the host as the mode cache keys it: host:port, with port 443 made
+// explicit when the dialled host had none, so "example.com" and
+// "example.com:443" are one host. The hostname is otherwise as dialled; case
+// is not folded.
+//
 // When To is ModeDirect the direct dial succeeded and no probe ran, so Verdict
 // is VerdictGenuine. Reason is the probe's error, and is nil for a direct
 // success.
@@ -47,7 +52,8 @@ type ModeChange struct {
 // paying for the tunnel. One extra handshake per host per hour costs nothing.
 const DefaultTunnelModeTTL = time.Hour
 
-// modeCache remembers, per host, how that host is reached.
+// modeCache remembers, per host, how that host is reached. Its keys are
+// normalised by hostPort before they get here.
 //
 // Per host rather than globally, because a split-tunnel proxy can treat the
 // hosts in a failover list differently. In memory only and never persisted: the

@@ -62,7 +62,9 @@ When the tunnel is tried and fails, `Dial` returns a `*DialError`. Its `Direct` 
 is always the original direct-path error, never the tunnel's, and `errors.Is` matches
 both the direct and the tunnel error.
 
-The mode is cached per host in the `Dialer`. A tunnel decision expires after one hour
+The mode is cached per host in the `Dialer`, keyed by `host:port` with the default port
+made explicit, so `example.com` and `example.com:443` share one entry, one log line and
+one hook call (`ModeChange.Host` carries that key). A tunnel decision expires after one hour
 (`WithTunnelModeTTL`), so a machine that leaves the intercepting network stops paying
 for the tunnel; a direct decision never expires. A failed tunnel leaves the cache
 unchanged. The first switch to the tunnel for a host writes one `Warn` log line, once

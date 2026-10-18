@@ -795,3 +795,45 @@ func TestExtraCannotReplaceInnerCredentialsInTunnel(t *testing.T) {
 		t.Fatal("the inner credentials were never used: extra replaced them on the tunnelled connection")
 	}
 }
+
+// "example.com" and "example.com:443" are one host to gRPC, so they must be one
+// entry in the mode cache, one log line and one hook call.
+func TestModeCacheNormalisesTheDefaultPort(t *testing.T) {
+	t.Parallel()
+	f := newFakeDial(t)
+	f.script(errDirect, VerdictIntercepted, nil, nil)
+	if _, err := f.dial(t, "example.com"); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []string{"example.com", "example.com:443"} {
+		if m := f.d.Mode(h); m != ModeTunnel {
+			t.Fatalf("Mode(%q) = %s, want tunnel", h, m)
+		}
+	}
+	if m := f.d.Mode("example.com:8443"); m != ModeUnknown {
+		t.Fatalf("Mode on another port = %s, want unknown", m)
+	}
+	// The second spelling goes straight to the tunnel: no direct dial, no probe.
+	if _, err := f.dial(t, "example.com:443"); err != nil {
+		t.Fatal(err)
+	}
+	if d, p, tu := f.counts(); d != 1 || p != 1 || tu != 2 {
+		t.Fatalf("direct=%d probe=%d tunnel=%d, want 1, 1 and 2", d, p, tu)
+	}
+	h := f.hooks.all()
+	if len(h) != 1 || h[0].Host != "example.com:443" {
+		t.Fatalf("hook calls = %+v, want one for example.com:443", h)
+	}
+	if n := len(f.logs.warns()); n != 1 {
+		t.Fatalf("%d tunnel log lines, want 1", n)
+	}
+
+	// An IPv6 literal without a port is normalised too.
+	g := newFakeDial(t)
+	if _, err := g.dial(t, "::1"); err != nil {
+		t.Fatal(err)
+	}
+	if m := g.d.Mode("[::1]:443"); m != ModeDirect {
+		t.Fatalf("Mode([::1]:443) = %s, want direct", m)
+	}
+}
