@@ -294,9 +294,7 @@ container uses host networking, which Docker Desktop cannot provide) and pulls
 `envoyproxy/envoy:v1.32-latest`. It is not in CI.
 
 See [SECURITY.md](SECURITY.md) for what the library does and does not verify,
-[CHANGELOG.md](CHANGELOG.md) for releases, and
-[docs/sentinel-migration.md](docs/sentinel-migration.md) for moving Sentinel's copies
-onto this library.
+and [CHANGELOG.md](CHANGELOG.md) for releases.
 
 ## License
 

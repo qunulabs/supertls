@@ -8,10 +8,10 @@ major version is 0, the public API may change between minor releases.
 
 ## [Unreleased]
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-10-19
 
 The first release: an extraction of Sentinel DRM's TLS-in-TLS transport into a generic
-library. The date is set when the version is tagged.
+library.
 
 ### Added
 
@@ -101,3 +101,6 @@ These are deliberate differences from the code this was extracted from.
   every caller option, so `extra` and the direct options cannot replace them.
 - `DialError.Direct` is always the original direct error; `errors.Is` matches it and the
   tunnel error.
+
+[Unreleased]: https://github.com/qunulabs/supertls/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/qunulabs/supertls/releases/tag/v0.1.0
