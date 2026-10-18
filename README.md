@@ -101,9 +101,10 @@ make calls on; for a tunnel it is the inner connection, verified by your credent
 connection of a tunnel too. A host may be `host` or `host:port`, without a scheme; no
 port means 443, as it does to gRPC.
 
-The credentials you pass are used unchanged on both paths. `Dial` refuses, with
-`ErrInvalidOption`, a zero or invalid `Trust`, nil credentials, gRPC's insecure and
-local credentials, and a host containing `://`. It cannot see TLS credentials built with
+The credentials you pass are used unchanged on both paths. `NewDialer` refuses a zero
+or invalid `Trust`, and `Dial` refuses nil credentials, gRPC's insecure and local
+credentials, an empty host and a host containing `://`, all with `ErrInvalidOption`. It
+cannot see TLS credentials built with
 `InsecureSkipVerify`: those would leave no verification anywhere on a tunnelled
 connection, and avoiding them is the caller's responsibility.
 

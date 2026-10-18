@@ -39,7 +39,7 @@ library. The date is set when the version is tagged.
 - `tunnelpb`: generated code for the neutral `supertls.v1.TunnelService/Open`.
 - `WithServiceName` on both client and server, so a deployment can keep an existing
   service name on the wire (Sentinel keeps `sentinel.tunnel.v1.TunnelService`).
-- Tests: the Sentinel tests, ported, plus the real-proxy tests (an in-process intercepting
+- Tests: the library-relevant Sentinel tests, ported, plus the real-proxy tests (an in-process intercepting
   proxy, an explicit proxy, and an Envoy test behind the `l7proxy` build tag), a
   throughput test against a direct connection, and guards pinning the dependency
   allowlist, the gRPC floor, the Go directive and the absence of em and en dashes.
@@ -52,15 +52,18 @@ These are deliberate differences from the code this was extracted from.
   cannot be reached now takes up to direct budget + probe timeout + tunnel budget to
   fail (5s + 10s + 20s by default).
 - **The switch is logged once per host**, not once per client.
-- **A failed tunnel leaves the mode cache unchanged.** The next dial tries direct first.
+- **A failed tunnel leaves the mode cache unchanged.** After a probe-then-tunnel failure
+  the next dial tries direct first. A host already cached as tunnel is different: its
+  failure is a plain wrapped error and the host keeps tunnelling until the decision's
+  TTL expires.
 - **The `CONNECT` reply honours the context.** Dialling through an HTTP proxy no longer
   waits on a silent proxy past the probe timeout.
 - **`conn.Conn.Write` returns the stream's terminal status** when the server ended the
   stream, rather than a bare `io.EOF`, and returns `io.EOF` without blocking when an
   unread frame is pending.
-- **`Dial` refuses unsafe arguments up front**, with `ErrInvalidOption`: a zero or
-  invalid `Trust`, nil inner credentials, gRPC insecure or local inner credentials, and a
-  host containing `://`. Inner credentials and the tunnel dialler are applied after
+- **Unsafe arguments are refused up front**, with `ErrInvalidOption`. `NewDialer`
+  refuses a zero or invalid `Trust`; `Dial` refuses nil inner credentials, gRPC insecure
+  or local inner credentials, an empty host and a host containing `://`. Inner credentials and the tunnel dialler are applied after
   every caller option, so `extra` and the direct options cannot replace them.
 - `DialError.Direct` is always the original direct error; `errors.Is` matches it and the
   tunnel error.
