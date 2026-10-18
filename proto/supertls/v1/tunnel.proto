@@ -1,0 +1,16 @@
+syntax = "proto3";
+package supertls.v1;
+option go_package = "github.com/qunulabs/supertls/tunnelpb;tunnelpb";
+
+// TunnelService carries an opaque byte stream and nothing else.
+service TunnelService {
+  // Open carries one inner connection for its lifetime. The stream ending in
+  // either direction tears the inner connection down.
+  rpc Open(stream Frame) returns (stream Frame);
+}
+
+// Frame is a chunk of the inner connection's byte stream. Boundaries carry no
+// meaning: a reader must reassemble, exactly as it would from a socket.
+message Frame {
+  bytes data = 1;
+}
