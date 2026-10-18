@@ -165,7 +165,7 @@ func (c *Conn) readLoop() {
 			// a MEASUREMENT of well-behaved tunnels. Fail the connection rather
 			// than truncate, because a frame that was not delivered whole is a
 			// torn byte stream and the TLS session above would fail anyway.
-			c.recvErr = fmt.Errorf("%w: peer sent %d bytes, limit is %d", ErrFrameTooLarge, len(data), MaxFrameBytes)
+			c.recvErr = fmt.Errorf("%w: %d bytes, limit is %d", ErrFrameTooLarge, len(data), MaxFrameBytes)
 			return
 		}
 		if len(data) == 0 {
@@ -358,7 +358,9 @@ func (c *Conn) Write(p []byte) (int, error) {
 // Read would.
 //
 // The wait ends early in three cases, so Write can never block forever. Close
-// or the write deadline fires. Or the reader goroutine is parked holding a frame
+// or the write deadline fires (Close always yields net.ErrClosed, even when the
+// stream status arrives at the same moment, because Close itself ends the
+// stream). Or the reader goroutine is parked holding a frame
 // the caller has not read: it cannot reach the terminal Recv until Read takes
 // that frame, and buffering frames without bound to get past it is not an
 // option, so the bare io.EOF is returned and Read will still report the status
@@ -370,13 +372,17 @@ func (c *Conn) sendError(err error) error {
 		return err
 	}
 	for {
-		select {
-		case <-c.recvEnded:
-			return c.readError()
-		default:
-		}
+		// Close wins. Close also ends the stream, so the reader goroutine
+		// stops with a cancellation (or with no error at all, when it was
+		// parked on an undelivered frame); that is the consequence of the
+		// Close, not the stream's own status, and must not be reported as one.
 		if isClosedChan(c.done) {
 			return net.ErrClosed
+		}
+		select {
+		case <-c.recvEnded:
+			return c.statusAfterRecvEnded()
+		default:
 		}
 		parked, wake := c.parkedOrWaiter()
 		if parked {
@@ -384,7 +390,7 @@ func (c *Conn) sendError(err error) error {
 		}
 		select {
 		case <-c.recvEnded:
-			return c.readError()
+			return c.statusAfterRecvEnded()
 		case <-wake:
 		case <-c.done:
 			return net.ErrClosed
@@ -392,6 +398,16 @@ func (c *Conn) sendError(err error) error {
 			return os.ErrDeadlineExceeded
 		}
 	}
+}
+
+// statusAfterRecvEnded is what sendError returns once the reader goroutine has
+// stopped: net.ErrClosed when Close caused the stop, otherwise what Read would
+// return.
+func (c *Conn) statusAfterRecvEnded() error {
+	if isClosedChan(c.done) {
+		return net.ErrClosed
+	}
+	return c.readError()
 }
 
 // writable reports whether a frame may be sent now.

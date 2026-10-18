@@ -452,6 +452,9 @@ func TestReadRejectsAnOversizedFrame(t *testing.T) {
 	if !strings.Contains(err.Error(), "65537") || !strings.Contains(err.Error(), "65536") {
 		t.Fatalf("the error must name the frame size and the limit: %v", err)
 	}
+	if n := strings.Count(err.Error(), "peer sent"); n != 1 {
+		t.Fatalf("the error says \"peer sent\" %d times, want once: %v", n, err)
+	}
 }
 
 // The cap must not reject a frame AT the limit, or a full-sized write from the
@@ -701,5 +704,43 @@ func TestConnWriteWaitingForStatusHonoursDeadlineAndClose(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Close did not release a Write waiting for the stream status")
+	}
+}
+
+// Close while Write waits for the stream status. Close tears the stream down,
+// so the reader goroutine ends at the same moment with a cancellation; the
+// writer must still see net.ErrClosed, never the cancellation and never io.EOF.
+// Run with -count=50: before the fix this depended on which channel the select
+// picked.
+func TestConnCloseDuringStatusWaitIsErrClosed(t *testing.T) {
+	s := newEndedStream(status.Error(codes.Canceled, "context canceled"))
+	var once sync.Once
+	c := NewConn(s, Options{Teardown: func() { once.Do(func() { close(s.release) }) }})
+	errCh := make(chan error, 1)
+	go func() { _, err := c.Write([]byte("x")); errCh <- err }()
+	<-s.sent
+	c.Close()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Write = %v, want net.ErrClosed", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not release a Write waiting for the stream status")
+	}
+	// The reader goroutine has ended too, so both channels are now closed.
+	select {
+	case <-c.recvEnded:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the reader goroutine did not end after Close")
+	}
+	// A writer that reaches the status wait only now, with both channels
+	// already closed, must also report the Close. This is the ordering the
+	// goroutine schedule above cannot force, so it is pinned directly.
+	if err := c.sendError(io.EOF); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("sendError after Close and stream end = %v, want net.ErrClosed", err)
+	}
+	if _, err := c.Write([]byte("x")); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Write after Close = %v, want net.ErrClosed", err)
 	}
 }

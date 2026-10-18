@@ -67,7 +67,8 @@ These are deliberate differences from the code this was extracted from.
   waits on a silent proxy past the probe timeout.
 - **`conn.Conn.Write` returns the stream's terminal status** when the server ended the
   stream, rather than a bare `io.EOF`, and returns `io.EOF` without blocking when an
-  unread frame is pending.
+  unread frame is pending. A `Close` while `Write` waits for that status always yields
+  `net.ErrClosed`.
 - **Unsafe arguments are refused up front**, with `ErrInvalidOption`. `NewDialer`
   refuses a zero or invalid `Trust`; `Dial` refuses nil inner credentials, gRPC insecure
   or local inner credentials, an empty host and a host containing `://`. Inner credentials and the tunnel dialler are applied after
