@@ -45,7 +45,8 @@ library. The date is set when the version is tagged.
   `Stream`, `Options`, `MaxFrameBytes` and `DefaultAcceptTimeout`.
 - `tunnelpb`: generated code for the neutral `supertls.v1.TunnelService/Open`.
 - `WithServiceName` on both client and server, so a deployment can keep an existing
-  service name on the wire (Sentinel keeps `sentinel.tunnel.v1.TunnelService`).
+  service name on the wire (Sentinel keeps `sentinel.tunnel.v1.TunnelService`). Both
+  sides apply one rule: a dotted sequence of identifiers such as `pkg.v1.Service`.
 - Tests: the library-relevant Sentinel tests, ported, plus the real-proxy tests (an in-process intercepting
   proxy, an explicit proxy, and an Envoy test behind the `l7proxy` build tag), a
   throughput test against a direct connection, and guards pinning the dependency

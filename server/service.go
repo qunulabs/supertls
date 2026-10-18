@@ -69,7 +69,11 @@ func (s *Service) Register(outer grpc.ServiceRegistrar) {
 // Unavailable.
 func (s *Service) Listener() net.Listener { return s.listener }
 
-// OpenTunnels reports how many tunnels are currently open.
+// OpenTunnels reports how many tunnel slots are currently held: every Open
+// call that has passed the limits and not yet returned. That includes tunnels
+// the inner server has not accepted yet (still waiting in the listener's
+// Deliver), so it can exceed the number of connections the inner server is
+// serving. It is the count MaxConcurrent and MaxPerAddress are checked against.
 func (s *Service) OpenTunnels() int { return s.limiter.open() }
 
 // Open implements tunnelpb.TunnelServiceServer. Register is what exposes it;

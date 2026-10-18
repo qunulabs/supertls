@@ -3,12 +3,13 @@ package supertls
 import (
 	"fmt"
 	"log/slog"
-	"regexp"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/keepalive"
+
+	"github.com/qunulabs/supertls/internal/servicename"
 )
 
 // Timing defaults.
@@ -156,18 +157,14 @@ func WithLogger(l *slog.Logger) Option {
 	}
 }
 
-// serviceNameRE is a dotted sequence of identifiers, the shape of a protobuf
-// full service name.
-var serviceNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$`)
-
-func validServiceName(name string) bool { return serviceNameRE.MatchString(name) }
-
 // WithServiceName sets the full gRPC service name the tunnel is served under,
 // for a deployment that must keep an existing name on the wire. The server must
-// be configured with the same name. The default is DefaultServiceName.
+// be configured with the same name. The name must be a dotted sequence of
+// identifiers such as pkg.v1.Service; server.WithServiceName applies the same
+// rule. The default is DefaultServiceName.
 func WithServiceName(name string) Option {
 	return func(c *config) error {
-		if !validServiceName(name) {
+		if !servicename.Valid(name) {
 			return invalid("WithServiceName: %q is not a dotted identifier such as pkg.v1.Service", name)
 		}
 		c.serviceName = name

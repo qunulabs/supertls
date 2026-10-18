@@ -104,7 +104,7 @@ func TestOptionsAcceptSentinelServiceName(t *testing.T) {
 	if c.serviceName != "sentinel.tunnel.v1.TunnelService" {
 		t.Fatalf("serviceName = %q", c.serviceName)
 	}
-	if !validServiceName("Single") {
+	if _, err := newConfig([]Option{WithServiceName("Single")}); err != nil {
 		t.Error("a single identifier is a valid service name")
 	}
 }

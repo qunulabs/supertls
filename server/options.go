@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
+
+	"github.com/qunulabs/supertls/internal/servicename"
 )
 
 // config is what the options build.
@@ -24,12 +25,13 @@ type Option func(*config) error
 
 // WithServiceName registers the tunnel service under name instead of
 // DefaultServiceName, so a deployment can keep a service name already on the
-// wire. The client must be given the same name. It must be non-empty and must
-// not contain a slash.
+// wire. The client must be given the same name. The name must be a dotted
+// sequence of identifiers such as pkg.v1.Service, the same rule the client's
+// supertls.WithServiceName applies.
 func WithServiceName(name string) Option {
 	return func(c *config) error {
-		if name == "" || strings.Contains(name, "/") {
-			return fmt.Errorf("%w: service name %q must be non-empty and contain no slash", ErrInvalidOption, name)
+		if !servicename.Valid(name) {
+			return fmt.Errorf("%w: service name %q is not a dotted identifier such as pkg.v1.Service", ErrInvalidOption, name)
 		}
 		c.name = name
 		return nil
