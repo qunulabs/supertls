@@ -3,6 +3,7 @@ package supertls
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,11 +69,18 @@ func (d *Dialer) Mode(host string) Mode { return d.modes.get(host) }
 //
 // inner is the caller's transport credentials for the session with its own
 // server. They are used unchanged on both paths, and they must verify the
-// server: nil, or credentials that verify nothing (grpc's insecure
-// credentials), are refused with ErrInvalidOption. extra is applied to the
+// server: nil, or credentials that verify nothing (grpc's insecure and local
+// credentials), are refused with ErrInvalidOption. TLS credentials built with
+// InsecureSkipVerify cannot be detected from outside and remain the caller's
+// responsibility: over a tunnel they would leave no verification anywhere.
+//
+// host is a host or host:port, without a scheme. extra is applied to the
 // direct connection and to the inner connection of a tunnel, never to the
 // outer one; it cannot replace inner, nor the dialler that carries the inner
-// connection through the tunnel.
+// connection through the tunnel. A dialler passed in extra (WithContextDialer)
+// therefore applies to the direct path only and is ignored on the tunnelled
+// inner connection; use WithOuterDialOptions to change how the tunnel reaches
+// the network.
 //
 // A host already known to need the tunnel goes straight to it. Everything else
 // tries the direct path first and stays there unless there is evidence of
@@ -120,13 +128,20 @@ func checkDialArgs(host string, inner credentials.TransportCredentials, extra []
 	if host == "" {
 		return invalid("Dial: empty host")
 	}
+	// A scheme-qualified target would become passthrough:///dns:///... on the
+	// inner connection of a tunnel, an authority no server certificate names.
+	if strings.Contains(host, "://") {
+		return invalid("Dial: host %q carries a scheme; pass host or host:port", host)
+	}
 	if inner == nil {
 		return invalid("Dial: nil inner credentials")
 	}
 	// The inner session is the whole security argument of the tunnel: the outer
 	// connection verifies nothing, by design. Credentials that do not verify the
 	// server would leave the tunnelled path with no verification at all.
-	if p := inner.Info().SecurityProtocol; p == "insecure" {
+	// "local" verifies no server identity either, and on a connection whose
+	// address is loopback it would carry the inner session in clear.
+	if p := inner.Info().SecurityProtocol; p == "insecure" || p == "local" {
 		return invalid("Dial: inner credentials (security protocol %q) do not verify the server", p)
 	}
 	return checkDialOptions("Dial", extra)

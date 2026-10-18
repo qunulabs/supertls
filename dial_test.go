@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials/local"
 
 	"github.com/qunulabs/supertls/internal/testpki"
 )
@@ -191,8 +192,9 @@ func TestDialGenuineNeverTunnels(t *testing.T) {
 	if !errors.Is(err, errDirect) {
 		t.Fatalf("errors.Is(err, errDirect) is false: %v", err)
 	}
-	// The brief's verbatim message never uses the word "genuine"; it says what
-	// genuine means instead.
+	if !strings.Contains(err.Error(), "genuine") {
+		t.Fatalf("err %q does not name the genuine verdict", err)
+	}
 	if !strings.Contains(err.Error(), "trusted roots") || !strings.Contains(err.Error(), "not interception") {
 		t.Fatalf("err %q does not say the peer was genuine", err)
 	}
@@ -466,6 +468,8 @@ func TestDialRejectsNilCredentials(t *testing.T) {
 		// Ruling (b): credentials that verify nothing would leave the tunnelled
 		// path with no verification at all.
 		{"insecure creds", "h:1", insecure.NewCredentials(), nil},
+		{"local creds", "h:1", local.NewCredentials(), nil},
+		{"scheme in host", "dns:///h:1", testCreds(), nil},
 		{"nil extra option", "h:1", testCreds(), []grpc.DialOption{nil}},
 	}
 	for _, c := range cases {
@@ -759,5 +763,35 @@ func TestRecorderIsPerDial(t *testing.T) {
 	}
 	if closedErr == nil || strings.Contains(closedErr.Error(), "certificate") {
 		t.Fatalf("closed port: err = %v, want a failure that does not borrow the other host's certificate error", closedErr)
+	}
+}
+
+// Ruling (c), tunnelled side: a WithTransportCredentials in extra is overridden
+// on the inner connection of a tunnel too. The outer server accepts the tunnel
+// stream and holds it open, so the inner connection reaches its handshake; the
+// caller's credentials must be the ones that run it.
+func TestExtraCannotReplaceInnerCredentialsInTunnel(t *testing.T) {
+	t.Parallel()
+	p := testpki.Standard(t)
+	cfg := &tls.Config{Certificates: []tls.Certificate{p.Server}, MinVersion: tls.VersionTLS12}
+	s := grpc.NewServer(grpc.Creds(credentials.NewTLS(cfg)),
+		grpc.UnknownServiceHandler(func(_ any, ss grpc.ServerStream) error {
+			<-ss.Context().Done()
+			return nil
+		}))
+	addr := grpcServer(t, s)
+	d, err := NewDialer(testTrust(), WithTunnelDialBudget(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n atomic.Int32
+	inner := countingCreds{TransportCredentials: strictCreds(p), n: &n}
+	extra := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	if c, err := d.tunnelFn(context.Background(), addr, inner, extra); err == nil {
+		c.Close()
+		t.Fatal("tunnelled dial to a server that never answers inside the tunnel succeeded")
+	}
+	if n.Load() == 0 {
+		t.Fatal("the inner credentials were never used: extra replaced them on the tunnelled connection")
 	}
 }

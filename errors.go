@@ -35,8 +35,8 @@ func (e *DialError) Error() string {
 	switch {
 	case e.Verdict == VerdictGenuine:
 		return fmt.Sprintf("supertls: direct dial of %s failed and the server presented a certificate "+
-			"from the trusted roots, so this is not interception and the tunnel was not tried: %v",
-			e.Host, e.Direct)
+			"from the trusted roots, so this is not interception and the tunnel was not tried: %v (probe: %s)",
+			e.Host, e.Direct, e.Verdict)
 	case e.Tunnel != nil:
 		return fmt.Sprintf("supertls: direct dial of %s failed: %v (probe: %s; tunnelled dial also failed: %v)",
 			e.Host, e.Direct, e.Verdict, e.Tunnel)
