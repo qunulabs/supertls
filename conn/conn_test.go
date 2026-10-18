@@ -12,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/qunulabs/supertls/internal/testpki"
 	"github.com/qunulabs/supertls/tunnelpb"
 )
@@ -568,5 +571,84 @@ func TestConnSetDeadlineAfterCloseIsErrClosed(t *testing.T) {
 		if err := set(time.Now().Add(time.Second)); !errors.Is(err, net.ErrClosed) {
 			t.Fatalf("%s: got %v, want net.ErrClosed", name, err)
 		}
+	}
+}
+
+// endedStream is a stream gRPC has already ended: Send reports the bare io.EOF
+// it uses for that, and the real status is available only from Recv. recv is
+// closed by the test to let Recv return recvErr.
+type endedStream struct {
+	recvErr error
+	release chan struct{}
+}
+
+func (s *endedStream) Send(*tunnelpb.Frame) error { return io.EOF }
+
+func (s *endedStream) Recv() (*tunnelpb.Frame, error) {
+	<-s.release
+	return nil, s.recvErr
+}
+
+func TestConnWriteReportsTheStreamStatusNotBareEOF(t *testing.T) {
+	want := status.Error(codes.Unimplemented, "unknown service")
+	s := &endedStream{recvErr: want, release: make(chan struct{})}
+	close(s.release)
+	c := NewConn(s, Options{})
+	defer c.Close()
+
+	_, err := c.Write([]byte("hello"))
+	if status.Code(err) != codes.Unimplemented {
+		t.Fatalf("Write = %v, want the Unimplemented status Read reports", err)
+	}
+	if _, rerr := c.Read(make([]byte, 1)); status.Code(rerr) != codes.Unimplemented {
+		t.Fatalf("Read = %v, want the same status", rerr)
+	}
+}
+
+func TestConnWriteAfterCleanEndIsEOF(t *testing.T) {
+	s := &endedStream{recvErr: io.EOF, release: make(chan struct{})}
+	close(s.release)
+	c := NewConn(s, Options{})
+	defer c.Close()
+
+	if _, err := c.Write([]byte("hello")); !errors.Is(err, io.EOF) {
+		t.Fatalf("Write = %v, want io.EOF", err)
+	}
+}
+
+func TestConnWriteWaitingForStatusHonoursDeadlineAndClose(t *testing.T) {
+	// Recv never returns, so the status never arrives.
+	s := &endedStream{recvErr: io.EOF, release: make(chan struct{})}
+	defer close(s.release)
+	c := NewConn(s, Options{})
+	defer c.Close()
+
+	if err := c.SetWriteDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+	errCh := make(chan error, 1)
+	go func() { _, err := c.Write([]byte("x")); errCh <- err }()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("Write = %v, want os.ErrDeadlineExceeded", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Write blocked past its deadline waiting for the stream status")
+	}
+
+	if err := c.SetWriteDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear deadline: %v", err)
+	}
+	go func() { _, err := c.Write([]byte("x")); errCh <- err }()
+	time.Sleep(50 * time.Millisecond)
+	c.Close()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Write = %v, want net.ErrClosed", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not release a Write waiting for the stream status")
 	}
 }

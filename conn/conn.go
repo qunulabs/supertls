@@ -64,6 +64,9 @@ type Conn struct {
 	// recvErr is why the reader goroutine stopped. Written once before frames
 	// is closed, so a receive on the closed channel happens-after the write.
 	recvErr error
+	// recvEnded is closed by the reader goroutine right after it records
+	// recvErr, so a writer can wait for the stream's terminal status.
+	recvEnded chan struct{}
 
 	// sends carries frames from Write to the writer goroutine that owns Send.
 	// Unbuffered, so a caller that abandons a frame on a deadline cannot queue
@@ -111,15 +114,16 @@ type Options struct {
 // or Close is called, so every Conn must be closed.
 func NewConn(s Stream, opts Options) *Conn {
 	c := &Conn{
-		stream:   s,
-		local:    opts.Local,
-		remote:   opts.Remote,
-		teardown: opts.Teardown,
-		frames:   make(chan []byte),
-		sends:    make(chan sendReq),
-		done:     make(chan struct{}),
-		rd:       newDeadline(),
-		wd:       newDeadline(),
+		stream:    s,
+		local:     opts.Local,
+		remote:    opts.Remote,
+		teardown:  opts.Teardown,
+		frames:    make(chan []byte),
+		recvEnded: make(chan struct{}),
+		sends:     make(chan sendReq),
+		done:      make(chan struct{}),
+		rd:        newDeadline(),
+		wd:        newDeadline(),
 	}
 	if c.local == nil {
 		c.local = tunnelAddr("tunnel")
@@ -135,6 +139,8 @@ func NewConn(s Stream, opts Options) *Conn {
 // readLoop is the sole caller of Recv for this connection's lifetime.
 func (c *Conn) readLoop() {
 	defer close(c.frames)
+	// Runs before the close above, and after recvErr is set on every path.
+	defer close(c.recvEnded)
 	for {
 		f, err := c.stream.Recv()
 		if err != nil {
@@ -293,7 +299,7 @@ func (c *Conn) Write(p []byte) (int, error) {
 				if isClosedChan(c.done) {
 					return written, net.ErrClosed
 				}
-				return written, err
+				return written, c.sendError(err)
 			}
 		case <-c.done:
 			return written, net.ErrClosed
@@ -305,6 +311,29 @@ func (c *Conn) Write(p []byte) (int, error) {
 		p = p[len(chunk):]
 	}
 	return written, nil
+}
+
+// sendError translates an error from Send. gRPC reports a stream that has
+// already ended as a bare io.EOF and says the real status must be read from the
+// receive side. Passing the io.EOF on would hide why the stream ended (a
+// service-name mismatch, for one, is an Unimplemented status), so this waits for
+// the reader goroutine to observe the terminal error and returns the same error
+// Read would. The wait is bounded by Close and by the write deadline, so Write
+// can never block forever.
+//
+// Divergence from Sentinel, which returns the bare io.EOF from Write.
+func (c *Conn) sendError(err error) error {
+	if !errors.Is(err, io.EOF) {
+		return err
+	}
+	select {
+	case <-c.recvEnded:
+		return c.readError()
+	case <-c.done:
+		return net.ErrClosed
+	case <-c.wd.wait():
+		return os.ErrDeadlineExceeded
+	}
 }
 
 // writable reports whether a frame may be sent now.
