@@ -47,7 +47,8 @@ func TrustPoolWithHostname(pool *x509.CertPool) Trust {
 
 // TrustSystemRoots recognises a server whose presented chain leads to a root in
 // the operating system's trust store, is valid for server authentication
-// (x509.ExtKeyUsageServerAuth), and whose leaf covers the dialled host name. Use it for a server that presents a certificate from the public web PKI.
+// (x509.ExtKeyUsageServerAuth), and whose leaf covers the dialled host name. Use it
+// for a server that presents a certificate from the public web PKI.
 func TrustSystemRoots() Trust {
 	return Trust{system: true, checkHostname: true}
 }

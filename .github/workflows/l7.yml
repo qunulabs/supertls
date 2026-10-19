@@ -1,0 +1,24 @@
+name: L7 proxy
+
+# Runs the real-proxy tests (build tag l7proxy): a real Envoy in front of the
+# server. They need a native Docker Engine on Linux (host networking), which the
+# GitHub-hosted ubuntu runners have. Run by hand from the Actions tab; it is not
+# part of every push because it pulls a container image.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  l7:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Pull the proxy image
+        run: docker pull envoyproxy/envoy:v1.32-latest
+      - name: Run the real-proxy tests
+        run: go test -tags l7proxy -run TestL7 -count=1 -v .

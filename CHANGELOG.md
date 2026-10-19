@@ -8,6 +8,19 @@ major version is 0, the public API may change between minor releases.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-19
+
+### Fixed
+
+- `TestOuterBackoffIsPerDialer` no longer asserts a reconnect count inside a fixed
+  500 ms window, which a loaded CI runner could miss. It polls with a 10 second deadline.
+
+### Changed
+
+- Documentation only: the `TrustSystemRoots` comment is wrapped, and `Probe` documents
+  that a host with an empty port (`"example.com:"`) is not defaulted to 443 and is left
+  for the dial to reject. A test pins it.
+
 ## [0.1.0] - 2026-10-19
 
 The first release: an extraction of Sentinel DRM's TLS-in-TLS transport into a generic

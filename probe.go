@@ -142,7 +142,8 @@ func probe(ctx context.Context, host string, trust Trust, timeout time.Duration)
 // hostPort gives host the port gRPC would dial when it names none: 443. It
 // follows gRPC's own target parsing, so a bare IPv6 literal ("::1") and a
 // bracketed one without a port ("[::1]") both become "[::1]:443". Anything it
-// cannot read is returned unchanged for the dial to reject.
+// cannot read, an empty port ("example.com:") included, is returned unchanged for the
+// dial to reject.
 func hostPort(host string) string {
 	if _, err := netip.ParseAddr(host); err == nil {
 		return net.JoinHostPort(host, "443")

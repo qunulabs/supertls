@@ -287,6 +287,7 @@ func TestHostPortDefaults(t *testing.T) {
 		"::1":               "[::1]:443",
 		"[::1]":             "[::1]:443",
 		"127.0.0.1":         "127.0.0.1:443",
+		"example.com:":      "example.com:", // an empty port is not defaulted; the dial rejects it
 	} {
 		if got := hostPort(in); got != want {
 			t.Errorf("hostPort(%q) = %q, want %q", in, got, want)

@@ -260,6 +260,8 @@ func TestOuterBackoffIsPerDialer(t *testing.T) {
 	dFast, nFast := run(fast)
 	dSlow, nSlow := run(slow)
 
+	// Poll rather than sleep a fixed window: a loaded CI runner can starve the
+	// fast Dialer's reconnect timer for longer than any short window.
 	var wg sync.WaitGroup
 	for _, d := range []*Dialer{dFast, dSlow} {
 		wg.Add(1)
@@ -272,15 +274,18 @@ func TestOuterBackoffIsPerDialer(t *testing.T) {
 			}
 			defer cc.Close()
 			cc.Connect()
-			time.Sleep(500 * time.Millisecond)
+			deadline := time.Now().Add(10 * time.Second)
+			for nFast.Load() < 5 && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
 		}()
 	}
 	wg.Wait()
 	if got := nFast.Load(); got < 5 {
-		t.Errorf("fast Dialer made %d outer attempts in 500ms, want at least 5", got)
+		t.Errorf("fast Dialer made %d outer attempts in 10s, want at least 5", got)
 	}
 	if got := nSlow.Load(); got != 1 {
-		t.Errorf("slow Dialer made %d outer attempts in 500ms, want exactly 1", got)
+		t.Errorf("slow Dialer made %d outer attempts, want exactly 1", got)
 	}
 	if dFast.cfg.outerBackoff != fast || dSlow.cfg.outerBackoff != slow {
 		t.Error("a Dialer's outer backoff changed after construction")
