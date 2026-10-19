@@ -61,6 +61,7 @@ const envoyConfig = `static_resources:
           "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
           stat_prefix: ingress
           codec_type: AUTO
+          stream_idle_timeout: %s
           route_config:
             name: local
             virtual_hosts:
@@ -103,7 +104,10 @@ const envoyConfig = `static_resources:
             tls_maximum_protocol_version: TLSv1_3
 `
 
-func TestL7HTTP2ProxyCarriesTunnel(t *testing.T) {
+// startEnvoy runs Envoy in front of the backend with the given stream_idle_timeout
+// ("0s" disables it) and returns the address it listens on and the container name.
+func startEnvoy(t *testing.T, p *testpki.PKI, backend, streamIdle string) (int, string) {
+	t.Helper()
 	if runtime.GOOS != "linux" {
 		t.Skip("the Envoy container runs with host networking, which only Linux provides")
 	}
@@ -111,12 +115,9 @@ func TestL7HTTP2ProxyCarriesTunnel(t *testing.T) {
 		t.Fatalf("docker is not on PATH, and the l7proxy tag was asked for explicitly: %v", err)
 	}
 
-	p := testpki.Standard(t)
-	backend, svc := startBackend(t, p)
-
 	dir := t.TempDir()
 	envoyPort := freePort(t)
-	writeProxyFiles(t, dir, p, envoyPort, portOf(t, backend))
+	writeProxyFiles(t, dir, p, envoyPort, portOf(t, backend), streamIdle)
 
 	name := "supertls-l7-" + randomSuffix(t)
 	out, err := exec.Command("docker", "run", "--rm", "-d", "--name", name,
@@ -141,6 +142,13 @@ func TestL7HTTP2ProxyCarriesTunnel(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+	return envoyPort, name
+}
+
+func TestL7HTTP2ProxyCarriesTunnel(t *testing.T) {
+	p := testpki.Standard(t)
+	backend, svc := startBackend(t, p)
+	envoyPort, name := startEnvoy(t, p, backend, "0s")
 
 	d := newDialer(t, p, nil, supertls.WithTunnelDialBudget(10*time.Second))
 	c, err := d.Dial(dialCtx(t), "localhost:"+fmt.Sprint(envoyPort), innerCreds(p))
@@ -167,11 +175,39 @@ func TestL7HTTP2ProxyCarriesTunnel(t *testing.T) {
 	}
 }
 
+// A proxy whose stream_idle_timeout is shorter than the tunnel's quiet time ends
+// the tunnel stream, because the one Open stream carries the whole session and a
+// quiet tunnel moves no bytes. The test records what the caller then sees: the
+// tunnel the server counted is gone, and the next call must reach the server again
+// (the client's connection re-dials through a new Open stream) rather than hang.
+func TestL7StreamIdleTimeoutEndsAQuietTunnel(t *testing.T) {
+	p := testpki.Standard(t)
+	backend, svc := startBackend(t, p)
+	envoyPort, name := startEnvoy(t, p, backend, "3s")
+
+	d := newDialer(t, p, nil, supertls.WithTunnelDialBudget(10*time.Second))
+	c, err := d.Dial(dialCtx(t), "localhost:"+fmt.Sprint(envoyPort), innerCreds(p))
+	if err != nil {
+		logs, _ := exec.Command("docker", "logs", name).CombinedOutput()
+		t.Fatalf("Dial through envoy: %v\nenvoy logs:\n%s", err, logs)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	healthCheck(t, c.ClientConn())
+
+	time.Sleep(8 * time.Second) // well past the 3s idle limit, with no traffic
+	t.Logf("OpenTunnels after 8s quiet = %d", svc.OpenTunnels())
+
+	// The call must succeed within its own deadline: the connection recovers
+	// through a new tunnel. healthCheck fails the test on any error.
+	healthCheck(t, c.ClientConn())
+	t.Logf("OpenTunnels after the next call = %d", svc.OpenTunnels())
+}
+
 // writeProxyFiles writes the proxy's certificate and key (signed by the foreign
 // root, as a TLS-inspecting proxy's would be) and its configuration into dir.
 // The directory and files are world-readable because the container's envoy user
 // is not the test's user.
-func writeProxyFiles(t *testing.T, dir string, p *testpki.PKI, envoyPort int, backendPort string) {
+func writeProxyFiles(t *testing.T, dir string, p *testpki.PKI, envoyPort int, backendPort, streamIdle string) {
 	t.Helper()
 	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatalf("chmod: %v", err)
@@ -193,7 +229,7 @@ func writeProxyFiles(t *testing.T, dir string, p *testpki.PKI, envoyPort int, ba
 	files := map[string][]byte{
 		"proxy.pem":  certPEM,
 		"proxy.key":  keyPEM,
-		"envoy.yaml": []byte(fmt.Sprintf(envoyConfig, envoyPort, bp)),
+		"envoy.yaml": []byte(fmt.Sprintf(envoyConfig, envoyPort, streamIdle, bp)),
 	}
 	for name, data := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
