@@ -8,7 +8,7 @@ on:
 permissions:
   contents: read
 
-# The l7proxy build tag is deliberately not run here: its tests drive a real
+# The l7proxy build tag is deliberately not run here (see l7.yml): its tests drive a real
 # inspecting proxy in a container and need docker. See README.md.
 
 jobs:

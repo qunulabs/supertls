@@ -15,6 +15,13 @@ major version is 0, the public API may change between minor releases.
 - `TestOuterBackoffIsPerDialer` no longer asserts a reconnect count inside a fixed
   500 ms window, which a loaded CI runner could miss. It polls with a 10 second deadline.
 
+### Added
+
+- A manual "L7 proxy" workflow that runs the real-proxy tests on a GitHub-hosted Ubuntu
+  runner. The Envoy test passed there in its committed form.
+- A real-proxy test for Envoy's `stream_idle_timeout`: the proxy ends a quiet tunnel
+  and the next call re-dials through a new one.
+
 ### Changed
 
 - Documentation only: the `TrustSystemRoots` comment is wrapped, and `Probe` documents

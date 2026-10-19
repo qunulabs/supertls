@@ -194,13 +194,20 @@ func TestL7StreamIdleTimeoutEndsAQuietTunnel(t *testing.T) {
 	t.Cleanup(func() { _ = c.Close() })
 	healthCheck(t, c.ClientConn())
 
+	if n := svc.OpenTunnels(); n != 1 {
+		t.Fatalf("OpenTunnels() = %d, want 1", n)
+	}
 	time.Sleep(8 * time.Second) // well past the 3s idle limit, with no traffic
-	t.Logf("OpenTunnels after 8s quiet = %d", svc.OpenTunnels())
+	if n := svc.OpenTunnels(); n != 0 {
+		t.Fatalf("after 8s quiet OpenTunnels() = %d, want 0 (the proxy ended the tunnel stream)", n)
+	}
 
-	// The call must succeed within its own deadline: the connection recovers
+	// The next call must succeed within its own deadline: the connection recovers
 	// through a new tunnel. healthCheck fails the test on any error.
 	healthCheck(t, c.ClientConn())
-	t.Logf("OpenTunnels after the next call = %d", svc.OpenTunnels())
+	if n := svc.OpenTunnels(); n != 1 {
+		t.Fatalf("after the next call OpenTunnels() = %d, want 1 (a new tunnel)", n)
+	}
 }
 
 // writeProxyFiles writes the proxy's certificate and key (signed by the foreign

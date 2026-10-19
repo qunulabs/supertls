@@ -273,12 +273,16 @@ another `Dialer`.
 
 ## Known gaps
 
-- **A layer-7 proxy in front of the server needs streaming timeouts disabled.** One
-  `Open` stream carries the whole tunnel, so a per-request or idle-stream timeout kills
-  it. Envoy's default route timeout is 15 seconds. Envoy's `stream_idle_timeout` (5
-  minutes by default) for an idle tunnel is untested.
-- The real-proxy test (`make l7`) has passed in an adapted run but is still owed a run
-  in its committed form on native Docker or CI.
+- **A layer-7 proxy in front of the server needs streaming timeouts disabled, or the
+  tunnel is renewed.** One `Open` stream carries the whole tunnel, so a per-request or
+  idle-stream timeout ends it. Envoy's default route timeout is 15 seconds and its
+  `stream_idle_timeout` is 5 minutes by default; a route's own `idle_timeout` overrides
+  the connection manager's. The real-proxy tests show both: with the timeouts disabled
+  one tunnel outlives 20 seconds, and with a short idle timeout the proxy ends a quiet
+  tunnel and the next call re-dials through a new one. A tunnel that carries traffic
+  (heartbeats, a long-lived stream) is not idle.
+- The real-proxy tests pass against `envoyproxy/envoy:v1.32-latest` on a GitHub-hosted
+  Ubuntu runner (see "Running the tests"). Other proxies are untested.
 
 ## Running the tests
 
@@ -291,7 +295,8 @@ make l7          # a real Envoy in front of the server
 
 All default tests use loopback only. `make l7` needs a native Docker Engine on Linux (the
 container uses host networking, which Docker Desktop cannot provide) and pulls
-`envoyproxy/envoy:v1.32-latest`. It is not in CI.
+`envoyproxy/envoy:v1.32-latest`. It is not part of every push: the "L7 proxy" workflow
+runs it by hand from the Actions tab.
 
 See [SECURITY.md](SECURITY.md) for what the library does and does not verify,
 and [CHANGELOG.md](CHANGELOG.md) for releases.

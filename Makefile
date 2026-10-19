@@ -24,7 +24,7 @@ crosscompile:
 		GOOS=$${target%/*} GOARCH=$${target#*/} go build ./... || exit 1; \
 	done
 
-# l7 runs the real-proxy tests. They need docker and are deliberately not in CI;
+# l7 runs the real-proxy tests. They need docker and run from the manual "L7 proxy" workflow, not every push;
 # see README.md.
 l7:
 	go test -tags l7proxy -run TestL7 -count=1 -v .
