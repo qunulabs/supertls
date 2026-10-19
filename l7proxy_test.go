@@ -44,7 +44,7 @@ const envoyConfig = `static_resources:
   listeners:
   - name: ingress
     address:
-      socket_address: { address: 127.0.0.1, port_value: %d }
+      socket_address: { address: 127.0.0.1, port_value: %[1]d }
     filter_chains:
     - transport_socket:
         name: envoy.transport_sockets.tls
@@ -61,7 +61,7 @@ const envoyConfig = `static_resources:
           "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
           stat_prefix: ingress
           codec_type: AUTO
-          stream_idle_timeout: %s
+          stream_idle_timeout: %[2]s
           route_config:
             name: local
             virtual_hosts:
@@ -72,7 +72,7 @@ const envoyConfig = `static_resources:
                 route:
                   cluster: backend
                   timeout: 0s
-                  idle_timeout: 0s
+                  idle_timeout: %[2]s
           http_filters:
           - name: envoy.filters.http.router
             typed_config:
@@ -87,7 +87,7 @@ const envoyConfig = `static_resources:
       - lb_endpoints:
         - endpoint:
             address:
-              socket_address: { address: 127.0.0.1, port_value: %d }
+              socket_address: { address: 127.0.0.1, port_value: %[3]d }
     typed_extension_protocol_options:
       envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
         "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
